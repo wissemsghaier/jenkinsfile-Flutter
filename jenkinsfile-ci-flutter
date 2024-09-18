@@ -1,0 +1,288 @@
+def COMMIT_ID
+def ZIP_FILE_NAME
+pipeline {
+    agent any
+    parameters {
+        string(name: 'BRANCH_NAME', defaultValue: 'main', description: 'Branch name to checkout')
+    }
+
+    environment {
+        NEXUS_CREDENTIALS_ID = 'nexus-jenkins'
+        NEXUS_URL = 'https://nexus.u-cloudsolutions.xyz'
+        NEXUS_REPOSITORY = 'student-repository'
+        GROUP_ID = 'com.artificial.Flutter'
+
+        ARTIFACT_ID = 'project-flutter'
+        CHECKOUT_DIR = 'project-checkout-dir' // Directory where the project will be checked out
+        BRANCH_NAME = ''
+        COMMIT_ID = ''
+        ZIP_FILE_NAME = ''
+        
+    }
+
+    stages {
+        stage("started") {
+            steps {
+                slackSend channel: "#jenkins-notifications", message: "STARTED: job '${env.JOB_NAME} ${env.BUILD_NUMBER}' (${env.BUILD_URL})"
+            }
+        }
+
+        stage('Checkout') {
+            agent any
+            steps {
+                script {
+                    dir("${env.CHECKOUT_DIR}") {
+                        checkout([$class: 'GitSCM',
+                            branches: [[name: "${params.BRANCH_NAME}"]],
+                            doGenerateSubmoduleConfigurations: false,
+                            extensions: [],
+                            submoduleCfg: [],
+                            userRemoteConfigs: [[credentialsId: 'authentification-gitlab', url: 'https://gitlab.u-cloudsolutions.xyz/summary-internship/2024/wissem-sghaier/project-flutter.git']]
+                        ]) 
+
+                        BRANCH_NAME = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
+                        COMMIT_ID = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                        ZIP_FILE_NAME = "${ARTIFACT_ID}-${COMMIT_ID}.zip"
+
+                        echo "Commit Hash: ${COMMIT_ID}"
+                        echo "Zip File Name: ${ZIP_FILE_NAME}"
+                        echo "Branch Name: ${BRANCH_NAME}"
+
+                        sh "pwd"
+                        sh "ls -la"
+                    }
+                }
+            }
+            post {
+                success {
+                    slackSend(color: 'good', message: "Checkout of pipeline succeeded!")
+                }
+                failure {
+                    slackSend(color: 'danger', message: "Checkout of pipeline failed!")
+                }
+            }
+        }
+
+        stage('Fetch the Packages Listed') {
+            agent {
+                docker {
+                    image '127.0.1.1:10001/repository/docker-repo/flutter-android-image:latest'
+                    args '-u root --privileged'
+                }
+            }
+            steps {
+                script {
+                    dir("${env.CHECKOUT_DIR}") {
+                        sh 'git config --global --add safe.directory /opt/flutter'
+                        sh 'export PUB_CACHE=/home/flutteruser/.pub-cache'
+                        sh 'flutter --version'
+                        sh 'flutter pub get'
+                    }
+                }
+            }
+            post {
+                success {
+                    slackSend(color: 'good', message: "Fetch the Packages Listed of pipeline succeeded!")
+                }
+                failure {
+                    slackSend(color: 'danger', message: "Fetch the Packages Listed of pipeline failed!")
+                }
+            }
+
+        }
+
+        stage('Flutter Test') {
+            agent {
+                docker {
+                    image '127.0.1.1:10001/repository/docker-repo/flutter-android-image:latest'
+                    args '-u root --privileged'
+                }
+            }
+            steps {
+                dir("${env.CHECKOUT_DIR}") {
+                    sh 'git config --global --add safe.directory /opt/flutter'
+                    sh 'export PUB_CACHE=/home/flutteruser/.pub-cache'
+                    sh 'flutter test'
+                }
+            }
+            post {
+                success {
+                    slackSend(color: 'good', message: "Flutter Test of pipeline succeeded!")
+                }
+                failure {
+                    slackSend(color: 'danger', message: "Flutter Test of pipeline failed!")
+                }
+            }
+
+        }
+
+        stage('Build APK') {
+    agent {
+        docker {
+            image '127.0.1.1:10001/repository/docker-repo/flutter-android-image:latest'
+            args '-u root --privileged'
+        }
+    }
+    steps {
+        script {
+            // Define the build name and build number
+            def buildName = "${params.BRANCH_NAME}" // Use the branch name parameter
+            def buildNumber = "${env.BUILD_NUMBER}"
+            
+            // Display information for verification
+            echo "Building APK for branch: ${buildName}, build number: ${buildNumber}, commit ID: ${COMMIT_ID}, zip file name: ${ZIP_FILE_NAME}"
+            
+            // Build the APK with the options of build-name and build-number
+            dir("${env.CHECKOUT_DIR}") {
+                sh """
+                flutter build apk --release \
+                --build-name=${buildName} \
+                --build-number=${buildNumber}
+                """
+                // Check if APK is generated
+                sh "ls -la build/app/outputs/flutter-apk"
+            }
+        }
+    }
+    post {
+        success {
+            slackSend(
+                color: 'good',
+                message: "Build APK succeeded!\nBranch: ${params.BRANCH_NAME}\nBuild Number: ${env.BUILD_NUMBER}\nCommit ID: ${COMMIT_ID}\nZip File Name: ${ZIP_FILE_NAME}"
+            )
+        }
+        failure {
+            slackSend(
+                color: 'danger',
+                message: "Build APK failed!\nBranch: ${params.BRANCH_NAME}\nBuild Number: ${env.BUILD_NUMBER}\nCommit ID: ${COMMIT_ID}\nZip File Name: ${ZIP_FILE_NAME}"
+            )
+        }
+    }
+}
+
+        stage('Archive APK') {
+            agent any
+            steps {
+                dir("${env.CHECKOUT_DIR}") {
+                    archiveArtifacts artifacts: 'build/app/outputs/flutter-apk/app-release.apk', fingerprint: true
+                }
+            }
+            post {
+                success {
+                    slackSend(
+                        color: 'good',
+                        message: "Build APK succeeded!\nBranch: ${params.BRANCH_NAME}\nBuild Number: ${env.BUILD_NUMBER}\nCommit ID: ${COMMIT_ID}\nZip File Name: ${ZIP_FILE_NAME}"
+                    )
+                }
+                failure {
+                    slackSend(
+                        color: 'danger',
+                        message: "Build APK failed!\nBranch: ${params.BRANCH_NAME}\nBuild Number: ${env.BUILD_NUMBER}\nCommit ID: ${COMMIT_ID}\nZip File Name: ${ZIP_FILE_NAME}"
+                    )
+                }
+            }
+        }
+
+        
+
+        stage('Package Project') {
+            agent any
+            steps {
+                script {
+                    dir("${env.CHECKOUT_DIR}") {
+                        sh "sudo apt-get install -y zip"
+                        sh "zip -r ${ZIP_FILE_NAME} ."
+                    }
+                }
+            }
+            post {
+                success {
+                    slackSend(color: 'good', message: "Package Project of pipeline succeeded!")
+                }
+                failure {
+                    slackSend(color: 'danger', message: "Package Project of pipeline failed!")
+                }
+            }
+
+        }
+
+        stage('Upload to Nexus') {
+            agent any
+            steps {
+                withCredentials([usernamePassword(credentialsId: NEXUS_CREDENTIALS_ID, usernameVariable: 'NEXUS_USERNAME', passwordVariable: 'NEXUS_PASSWORD')]) {
+                    script {
+                        dir("${env.CHECKOUT_DIR}") {
+                            def uploadUrl = "${NEXUS_URL}/repository/${NEXUS_REPOSITORY}/${GROUP_ID.replace('.', '/')}/${ARTIFACT_ID}/${COMMIT_ID}/${ZIP_FILE_NAME}"
+                            echo "Uploading ${ZIP_FILE_NAME} to Nexus..."
+                            sh """
+                                curl -u ${NEXUS_USERNAME}:${NEXUS_PASSWORD} \
+                                --upload-file ${ZIP_FILE_NAME} \
+                                "${uploadUrl}"
+                            """
+                        }
+                    }
+                }
+            }
+            post {
+                success {
+                    slackSend(color: 'good', message: "Upload to Nexus of pipeline succeeded!")
+                }
+                failure {
+                    slackSend(color: 'danger', message: "Upload to Nexus of pipeline failed!")
+                }
+            }
+
+        }
+        stage('DISTRIBUTE') {
+            agent any
+            steps {
+                dir("${env.CHECKOUT_DIR}") {
+                    script {
+                        // Define the path to the generated APK
+                        def apkPath = 'build/app/outputs/flutter-apk/app-release.apk'
+
+                        // Define the tag using build number, branch, or commit ID
+                        def tagName = "v${env.BUILD_NUMBER}-${env.BRANCH_NAME ?: 'main'}-${COMMIT_ID?.take(7)}"
+
+                        // Check if APK exists before distributing
+                        if (fileExists(apkPath)) {
+                            echo "APK found at ${apkPath}. Proceeding with distribution."
+                            echo "Distributing APK with tag: ${tagName}"
+
+                            // Distribute APK to App Center with version tag
+                            appCenter(
+                                apiToken: '79aabd068b99a4b35b3688e39b1a69ff6eec38e6', // Use a credentials ID for security
+                                ownerName: 'sghaier-fss.u-sfax.tn',
+                                appName: 'flutter-app',
+                                pathToApp: apkPath,
+                                distributionGroups: 'flutter-app',
+                                releaseNotes: "Branch: ${env.BRANCH_NAME ?: 'main'} - Build ${env.BUILD_NUMBER} - Commit ${COMMIT_ID?.take(7)}"
+                            )
+                        } else {
+                            error "APK not found at ${apkPath}. Distribution aborted."
+                        }
+                    }
+                }
+            }
+            post {
+                success {
+                    slackSend(color: 'good', message: "DISTRIBUTE stage succeeded! APK distributed with tag ${env.BUILD_NUMBER}.")
+            }
+                failure {
+                    slackSend(color: 'danger', message: "DISTRIBUTE stage failed! APK distribution failed for build ${env.BUILD_NUMBER}.")
+                }
+            }
+        }
+    }
+    post {
+        always {
+            cleanWs()      
+        }
+        success {
+            slackSend(channel: '#jenkins-notifications', message: "Build ${currentBuild.result} for job ${env.JOB_NAME} #${env.BUILD_NUMBER} (duration: ${currentBuild.durationString}). Check out the build at ${env.BUILD_URL}")
+        }
+        failure {
+            slackSend(channel: '#jenkins-notifications', message: "Build ${currentBuild.result} for ${env.JOB_NAME} #${env.BUILD_NUMBER} (duration: ${currentBuild.durationString}). Check out the build at ${env.BUILD_URL}")
+        }
+    }
+}
