@@ -42,7 +42,7 @@ RUN apt-get update && \
     lib32stdc++6 \
     ruby-full \
     build-essential && \
-    apt-get clean && rm -rf /var/lib/apt/lists/ /tmp/ /var/tmp/
+    apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Installer Fastlane via RubyGems
 RUN gem install fastlane -NV
@@ -93,3 +93,4 @@ EXPOSE 8080
 
 # Commande par défaut pour exécuter le conteneur
 CMD ["flutter", "doctor", "-v"]
+
